@@ -443,22 +443,6 @@ mode = args.get('mode', None)
 
 
 if mode is None:
-#    url = build_url({'mode': 'folder', 'foldername': 'Folder One'})
-#    li = xbmcgui.ListItem('Folder One', iconImage='DefaultFolder.png')
-#    xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=True)
-#
-#    url = build_url({'mode': 'folder', 'foldername': 'Folder Two'})
-#    li = xbmcgui.ListItem('Folder Two', iconImage='DefaultFolder.png')
-#    xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=True)
-#
-#    url = build_url({'mode': 'folder', 'foldername': __data__})
-#    li = xbmcgui.ListItem(__data__, iconImage='DefaultFolder.png')
-#    xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=True)
-#
-#    url = build_url({'mode': 'experiment', 'foldername': 'root'})
-#    li = xbmcgui.ListItem('Pick me!', iconImage='DefaultFolder.png')
-#    xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=True)
-
     url = build_url({'mode': 'sync', 'foldername': 'root'})
     li = xbmcgui.ListItem('Add all subscriptions to library', iconImage='DefaultFolder.png')
     xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=False)
@@ -552,13 +536,3 @@ elif mode[0] == 'export_channel':
     dest = os.path.join(__data__, 'TV', safe_title)
     if not os.path.exists(dest):
         os.makedirs(dest)
-
-# elif mode[0] == 'rule_builder':
-#    rules = args.get('rules', None)
-#    rules = rules_from_string(rules)
-#    # TODO: add item to fetch results with current rule set
-#    for rule in (rules or []):
-#        url = build_url({'mode':'rule_builder', 'rules': rules})
-#        li = xbmcgui.ListItem('' + rule['title'], iconImage = 'DefaultVideo.png')
-#        xbmcplugin.addDirectoryItem(handle = __handle__, url = url, listitem = li, isFolder = False)
-#    xbmcplugin.endOfDirectory(__handle__)
