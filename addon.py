@@ -254,37 +254,24 @@ def fetch_upload_about_multithreaded(video_ids, force=False):
     # multithreaded wrapper function for fetch_upload_about() method
     # - takes a list of video_ids and returns a list of upload info
 
-    def wrap(video_id, results, index, force=False):
-        while results[index] is None:
-            try:
-                results[index] = fetch_upload_about(video_id, force=force)
-            except:
-                pass
-        return
-
-    from threading import Thread
+    import concurrent.futures
 
     thread_count = 10
     upload_count = len(video_ids)
-    threads = [None] * thread_count  # TODO: Make thread_count adjustable
-    uploads = [None] * upload_count
 
-    # process in batches of thread_count
+    uploads = [None] * upload_count
+    futures = [None] * upload_count
+
     index = 0
-    batches = -(-upload_count // thread_count)
-    for i in range(1, batches + 1):
-        k = 0
-        for j in range(thread_count):
-            threads[j] = Thread(target=wrap, args=(video_ids[index], uploads, index),
-                                kwargs={'force': force})
-            threads[j].start()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+        while index < upload_count:
+            futures[index] = executor.submit(fetch_upload_about,
+                                             video_ids[index],
+                                             {'force': force})
             index += 1
-            k += 1
-            if index == upload_count:
-                break
-        for l in range(k):
-            threads[l].join()
-        print("thread batch %s of %s returned" % (i, batches))  # DEBUG #
+
+    for i in range(upload_count):
+        uploads[i] = futures[i].result()
 
     return uploads
 
