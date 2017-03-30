@@ -7,8 +7,131 @@ import xbmcaddon
 import xbmc
 import urllib
 import urlparse
+import os
+from resources.lib import peewee as pw
+
+__handle__ = int(sys.argv[1])
+args = urlparse.parse_qs(sys.argv[2][1:])
+
+xbmcplugin.setContent(__handle__, 'files')
+
+__addon__ = xbmcaddon.Addon('plugin.video.yourtube')
+__data__ = xbmc.translatePath(__addon__.getAddonInfo('profile'))
+__path__ = xbmc.translatePath(__addon__.getAddonInfo('path'))
+
+db = pw.SqliteDatabase(os.path.join(__data__, 'yourtube.db'))
 
 valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
+
+
+class Channel(pw.Model):
+    id = pw.CharField(primary_key=True)
+    title = pw.CharField()
+    plot = pw.CharField()
+    thumb = pw.CharField()
+    premiered = pw.DateField()
+
+    class Meta:
+        database = db
+
+
+class Upload(pw.Model):
+    id = pw.CharField(primary_key=True)
+    channel = pw.ForeignKeyField(Channel, related_name='uploads')
+    title = pw.CharField()
+    plot = pw.CharField()
+    thumb = pw.CharField()
+    aired = pw.DateField()
+    runtime = pw.IntegerField()
+
+    class Meta:
+        database = db
+
+    @staticmethod
+    def last_seen_id(channel):
+        try:
+            lsid = (Upload
+                .select(Upload.id, Upload.aired)
+                .where(Upload.channel == channel)
+                .order_by(Upload.aired.desc())
+                .get()
+                .id)
+        except Upload.DoesNotExist:
+            lsid = None
+
+        return lsid
+
+
+def db_lookup(table, id):
+
+    row = None
+    
+    try:
+        row = table.select().where(table.id == id).dicts().get()
+        
+    except table.DoesNotExist:
+        return None
+
+    dictionary = {}
+
+    if table.__name__ == 'Channel':
+        dictionary = row
+        dictionary['channel_id'] = dictionary.pop('id')
+
+    elif table.__name__ == 'Upload':
+        dictionary = row
+        dictionary['video_id'] = dictionary.pop('id')
+        dictionary['channel_id'] = dictionary.pop('channel')
+
+    return dictionary
+        
+
+def db_insert(table, data, force=False):
+    
+    new = []
+
+    for datum in data:
+        if table.__name__ == 'Channel':
+            try:
+                new.append({
+                    "id": datum["channel_id"],
+                    "title": datum["title"],
+                    "plot": datum["plot"],
+                    "thumb": datum["thumb"],
+                    "premiered": datum["premiered"]
+                })
+            except KeyError:  # missing necessary info
+                raise
+
+        elif table.__name__ == 'Upload':
+            try:
+                new.append({
+                    "id": datum["video_id"],
+                    "channel": datum["channel_id"],
+                    "title": datum["title"],
+                    "plot": datum["plot"],
+                    "thumb": datum["thumb"],
+                    "aired": datum['aired'],
+                    "runtime": datum['runtime']
+                })
+            except KeyError:  # missing necessary info
+                raise
+
+    # Insert rows 100 at a time
+    with db.atomic():
+        for idx in range(0, len(new), 100):
+            
+            rows = pw.InsertQuery(table, rows=new[idx:idx+100])
+            
+            if force:
+                rows = rows.on_conflict(action='REPLACE')
+
+            else:
+                rows = rows.on_conflict(action='IGNORE')
+
+            rows.execute()
+            
+    return True
 
 
 def userpass_from_file(file):
@@ -24,7 +147,6 @@ def fetch_subscriptions(force=False):
     # - file is saved as "subscriptions.rss"
     # - function returns the contents of that file
     # - if "force" is specified existing "subscriptions.rss" file is ignored
-    import os
 
     fname = os.path.join(__data__, 'subscriptions.rss')
     exists = os.path.isfile(fname)
@@ -45,10 +167,15 @@ def fetch_subscriptions(force=False):
     return rss
 
 
-def fetch_channel_about(title, channel_id):
+def fetch_channel_about(title, channel_id, force=False):
     # returns a dictionary of channel information fetched from the channel's "about" page
     from bs4 import BeautifulSoup
     import requests
+
+    exists = db_lookup(Channel, channel_id)
+
+    if exists and not force:
+        return exists
 
     sub = {
         'title': title,
@@ -90,7 +217,6 @@ def parse_subscriptions():
 def make_nfo_tvshow(channel_info, path):
     # take a dictionary of channel_info and turn it into a tvshow.nfo xml for kodi
     import xml.etree.ElementTree as ET
-    import os
 
     tvshow = ET.Element('tvshow')
     for tag in channel_info:
@@ -103,7 +229,6 @@ def make_nfo_tvshow(channel_info, path):
 def make_nfo_episode(upload_info, path):
     # take a dictionary of upload_info and turn it into an episode.nfo xml for kodi
     import xml.etree.ElementTree as ET
-    import os
 
     episode = ET.Element('episodedetails')
     for tag in upload_info:
@@ -147,6 +272,10 @@ def fetch_channel_uploads(channel_id, force=False, last_seen_id=None):
 
     seen = False
     uploads = []
+
+    if not last_seen_id and not force:
+        last_seen_id = Upload.last_seen_id(channel_id)
+
     if last_seen_id:
         for upload in recent_uploads:
             if upload['video_id'] == last_seen_id:
@@ -223,6 +352,10 @@ def fetch_upload_about(video_id, force=False):
     from bs4 import BeautifulSoup
     import requests
 
+    exists = db_lookup(Upload, video_id)
+    if exists and not force:
+        return exists
+
     upload = {'video_id': video_id}
     r = requests.get("https://www.youtube.com/watch?v=" + video_id)
     page = BeautifulSoup(r.text, "html.parser")
@@ -230,6 +363,7 @@ def fetch_upload_about(video_id, force=False):
     upload['thumb'] = "https://i.ytimg.com/vi/" + video_id + "/hqdefault.jpg"
     upload['aired'] = page.find("meta", attrs={"itemprop": "datePublished"})['content']
     upload['title'] = page.find("meta", attrs={"itemprop": "name"})['content']
+    upload['channel_id'] = page.find("meta", attrs={"itemprop": "channelId"})['content']
 
     # extract plot
     description = page.find("p", id="eow-description").strings
@@ -280,7 +414,6 @@ def lookup_lastseen(channel_title):
     # check the data folder for the most recent episode of channel_title
     # - returns video_id of latest "cached" episode
     # TODO: make actual cache based on channel_id
-    import os
 
     # make the name windows-safe
     channel_title = ''.join(c for c in channel_title if c in valid_chars)
@@ -305,7 +438,6 @@ def lookup_lastepisode(channel_title):
     # find the highest numbered episode for a channel_title
     # - returns an int
     # TODO: in the future this will need to work for series instead of channels
-    import os
 
     # make the name windows-safe
     channel_title = ''.join(c for c in channel_title if c in valid_chars)
@@ -319,9 +451,31 @@ def lookup_lastepisode(channel_title):
     else:
         return max(episodes)
 
+def db_test():
+    start = datetime.now()
+    subs = parse_subscriptions()
+    total = len(subs)
+    current = 1
+    
+    for sub in subs:
+
+        print("processing sub %s of %s" % (current, total) )
+        
+        about = fetch_channel_about(sub['title'], sub['channel_id'])
+        db_insert(Channel, [about])
+        
+        uploads = fetch_channel_uploads(sub['channel_id'])
+        video_ids = [u['video_id'] for u in uploads]
+        upload_abouts = fetch_upload_about_multithreaded(video_ids, force=False)
+        db_insert(Upload, upload_abouts)
+
+        current += 1
+    end = datetime.now()
+
+    print("Time elapsed: %s" % (end - start))
+
 
 def sync(force=False):
-    import os
 
     subs = parse_subscriptions()
     total_subs = len(subs)
@@ -410,16 +564,6 @@ def make_rules_directory(rules):
     xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=True)
 
 
-__handle__ = int(sys.argv[1])
-args = urlparse.parse_qs(sys.argv[2][1:])
-
-xbmcplugin.setContent(__handle__, 'files')
-
-__addon__ = xbmcaddon.Addon('plugin.video.yourtube')
-__data__ = xbmc.translatePath(__addon__.getAddonInfo('profile'))
-__path__ = xbmc.translatePath(__addon__.getAddonInfo('path'))
-
-
 def build_url(query):
     for key in query.keys():
         query[key] = query[key].encode('utf-8')
@@ -428,6 +572,8 @@ def build_url(query):
 
 mode = args.get('mode', None)
 
+db.connect()
+db.create_tables([Channel, Upload], safe=True)
 
 if mode is None:
 #    url = build_url({'mode': 'folder', 'foldername': 'Folder One'})
@@ -450,6 +596,10 @@ if mode is None:
     li = xbmcgui.ListItem('Add all subscriptions to library', iconImage='DefaultFolder.png')
     xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=False)
 
+    url = build_url({'mode': 'db_test', 'foldername': 'root'})
+    li = xbmcgui.ListItem('db_test', iconImage='DefaultFolder.png')
+    xbmcplugin.addDirectoryItem(handle=__handle__, url=url, listitem=li, isFolder=False)
+
     xbmcplugin.endOfDirectory(__handle__)
 
 elif mode[0] == 'sync':
@@ -458,6 +608,10 @@ elif mode[0] == 'sync':
         sync(force=True)
     else:
         sync(force=False)
+
+
+elif mode[0] == 'db_test':
+    db_test()
 
 elif mode[0] == 'folder':
     foldername = args['foldername'][0]
@@ -533,7 +687,6 @@ elif mode[0] == 'play':
     xbmc.Player().play('plugin://plugin.video.youtube/play/?video_id=' + args['video_id'][0])
 
 elif mode[0] == 'export_channel':
-    import os
 
     safe_title = ''.join(c for c in args['title'][0] if c in valid_chars)
     dest = os.path.join(__data__, 'TV', safe_title)
