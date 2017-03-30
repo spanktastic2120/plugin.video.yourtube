@@ -192,6 +192,8 @@ except ImportError:
         for fmt in formats:
             try:
                 return post_process(datetime.datetime.strptime(value, fmt))
+            except TypeError:
+                return post_process(datetime.datetime(*(time.strptime(value, fmt)[0:6])))
             except ValueError:
                 pass
         return value
